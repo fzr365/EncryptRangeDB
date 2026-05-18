@@ -1,0 +1,37 @@
+.idea/
+.codebuddy/
+.m2/
+.playwright-cli/
+
+# Dependency directories
+node_modules/
+**/node_modules/
+
+# Build outputs
+backend/target/
+frontend/dist/
+
+# Local database and runtime data
+mysql-data/
+*.pid
+*.pem
+mysql-my.ini
+
+# Logs
+*.log
+*.out
+*.err
+
+# Local temp and ad hoc files
+temp_*.py
+test_docx_edit.py
+update_thesis_docx.py
+revise_thesis_v5.py
+npx
+#
+
+docs/
+tools/
+
+# Local verification screenshots
+frontend/*-check.png

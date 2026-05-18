@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.encryprangedb.mapper.EafsAnchorMapper">
+
+    <resultMap id="AnchorMap" type="com.encryprangedb.model.entity.EafsAnchorEntity">
+        <id property="id" column="id"/>
+        <result property="bucket" column="bucket"/>
+        <result property="anchorOrder" column="anchor_order"/>
+        <result property="anchorRindex" column="anchor_rindex"/>
+        <result property="nodeId" column="node_id"/>
+    </resultMap>
+
+    <select id="findFloorAnchor" resultMap="AnchorMap">
+        SELECT *
+        FROM eafs_anchor
+        WHERE bucket = #{bucket}
+          AND anchor_rindex &lt;= #{rindex}
+        ORDER BY anchor_rindex DESC, anchor_order DESC
+        LIMIT 1
+    </select>
+
+    <delete id="deleteByBucket">
+        DELETE FROM eafs_anchor
+        WHERE bucket = #{bucket}
+    </delete>
+
+    <delete id="deleteFromOrder">
+        DELETE FROM eafs_anchor
+        WHERE bucket = #{bucket}
+          AND anchor_order &gt;= #{fromOrder}
+    </delete>
+
+    <insert id="insertAnchor" parameterType="com.encryprangedb.model.entity.EafsAnchorEntity" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO eafs_anchor (bucket, anchor_order, anchor_rindex, node_id)
+        VALUES (#{bucket}, #{anchorOrder}, #{anchorRindex}, #{nodeId})
+    </insert>
+
+    <select id="listByBucket" resultMap="AnchorMap">
+        SELECT *
+        FROM eafs_anchor
+        WHERE bucket = #{bucket}
+        ORDER BY anchor_order ASC
+    </select>
+</mapper>

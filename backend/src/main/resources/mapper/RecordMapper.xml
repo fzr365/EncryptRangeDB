@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.encryprangedb.mapper.RecordMapper">
+
+    <insert id="insertRecord" parameterType="com.encryprangedb.model.entity.EncryptedRecordEntity">
+        INSERT INTO encrypted_record (table_name, record_id, cipher_blob, integrity_tag, key_version)
+        VALUES (#{tableName}, #{recordId}, #{cipherBlob}, #{integrityTag}, #{keyVersion})
+    </insert>
+
+    <update id="updateIntegrityTag">
+        UPDATE encrypted_record
+        SET integrity_tag = #{integrityTag}
+        WHERE id = #{id}
+    </update>
+
+    <insert id="insertIndex" parameterType="com.encryprangedb.model.entity.EncryptedIndexEntity">
+        INSERT INTO encrypted_index (table_name, column_name, record_id, rindex, skindex, segment_id)
+        VALUES (#{tableName}, #{columnName}, #{recordId}, #{rindex}, #{skindex}, #{segmentId})
+    </insert>
+
+    <select id="listIndexedBuckets" resultType="map">
+        SELECT DISTINCT table_name AS tableName,
+                        column_name AS columnName
+        FROM encrypted_index
+        ORDER BY table_name ASC, column_name ASC
+    </select>
+
+    <select id="selectRecord" resultType="com.encryprangedb.model.entity.EncryptedRecordEntity">
+        SELECT id,
+               table_name AS tableName,
+               record_id AS recordId,
+               cipher_blob AS cipherBlob,
+               integrity_tag AS integrityTag,
+               key_version AS keyVersion,
+               created_at AS createdAt
+        FROM encrypted_record
+        WHERE table_name = #{table}
+          AND record_id = #{recordId}
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <select id="selectAllRecords" resultType="com.encryprangedb.model.entity.EncryptedRecordEntity">
+        SELECT id,
+               table_name AS tableName,
+               record_id AS recordId,
+               cipher_blob AS cipherBlob,
+               integrity_tag AS integrityTag,
+               key_version AS keyVersion,
+               created_at AS createdAt
+        FROM encrypted_record
+        ORDER BY id ASC
+    </select>
+
+    <select id="selectIndexRows" resultType="com.encryprangedb.model.entity.EncryptedIndexEntity">
+        SELECT id,
+               table_name AS tableName,
+               column_name AS columnName,
+               record_id AS recordId,
+               rindex,
+               skindex,
+               segment_id AS segmentId
+        FROM encrypted_index
+        WHERE table_name = #{table}
+          AND column_name = #{column}
+        ORDER BY rindex ASC, id ASC
+    </select>
+
+    <select id="selectByRange" resultType="map">
+        SELECT r.record_id,
+               r.cipher_blob,
+               r.integrity_tag,
+               r.key_version,
+               i.table_name,
+               i.column_name,
+               i.rindex,
+               i.segment_id
+        FROM encrypted_index i
+                 INNER JOIN encrypted_record r ON i.record_id = r.record_id
+        WHERE i.table_name = #{table}
+          AND i.column_name = #{column}
+          AND i.rindex BETWEEN #{lower} AND #{upper}
+        ORDER BY i.rindex ASC
+    </select>
+
+    <select id="selectByRecordIds" resultType="map">
+        SELECT r.record_id,
+               r.cipher_blob,
+               r.integrity_tag,
+               r.key_version,
+               i.table_name,
+               i.column_name,
+               i.rindex,
+               i.segment_id
+        FROM encrypted_record r
+                 LEFT JOIN encrypted_index i
+                           ON i.record_id = r.record_id
+                               AND i.table_name = r.table_name
+                               AND i.column_name = #{column}
+        WHERE r.table_name = #{table}
+          AND r.record_id IN
+        <foreach collection="recordIds" item="recordId" open="(" separator="," close=")">
+            #{recordId}
+        </foreach>
+    </select>
+
+    <select id="selectLatest" resultType="map">
+        SELECT r.record_id,
+               r.cipher_blob,
+               r.integrity_tag,
+               r.key_version,
+               r.created_at,
+               i.table_name,
+               i.column_name,
+               i.rindex,
+               i.segment_id
+        FROM encrypted_record r
+                 LEFT JOIN encrypted_index i
+                           ON i.record_id = r.record_id
+                               AND i.table_name = r.table_name
+                               AND i.column_name = #{column}
+        WHERE r.table_name = #{table}
+        ORDER BY r.created_at DESC, r.id DESC
+        LIMIT #{limit}
+    </select>
+</mapper>

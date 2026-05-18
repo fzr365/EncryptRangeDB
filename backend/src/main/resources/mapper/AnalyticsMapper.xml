@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.encryprangedb.mapper.AnalyticsMapper">
+
+    <select id="countRecords" resultType="long">
+        SELECT COUNT(*) FROM encrypted_record
+    </select>
+
+    <select id="countIndexes" resultType="long">
+        SELECT COUNT(*) FROM encrypted_index
+    </select>
+
+    <select id="countChainNodes" resultType="long">
+        SELECT COUNT(*) FROM eafs_ordered_node
+    </select>
+
+    <select id="countAuditLogs" resultType="long">
+        SELECT COUNT(*) FROM query_audit_log
+    </select>
+
+    <select id="avgRangeLatency" resultType="long">
+        SELECT COALESCE(AVG(elapsed_ms), 0)
+        FROM query_audit_log
+        WHERE action_type = 'RANGE_QUERY'
+          AND status = 'SUCCESS'
+    </select>
+
+    <select id="latestRangeAudit" resultType="com.encryprangedb.model.entity.QueryAuditLogEntity">
+        SELECT id,
+               action_type AS actionType,
+               sql_text AS sqlText,
+               table_name AS tableName,
+               column_name AS columnName,
+               lower_index AS lowerIndex,
+               upper_index AS upperIndex,
+               hit_count AS hitCount,
+               elapsed_ms AS elapsedMs,
+               status,
+               detail_text AS detailText,
+               created_at AS createdAt
+        FROM query_audit_log
+        WHERE action_type = 'RANGE_QUERY'
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <select id="activePolicy" resultType="com.encryprangedb.model.entity.OpePolicyEntity">
+        SELECT id,
+               policy_name AS policyName,
+               sensitivity,
+               segment_json AS segmentJson,
+               active_flag AS activeFlag,
+               created_at AS createdAt,
+               updated_at AS updatedAt
+        FROM ope_policy_config
+        WHERE active_flag = 1
+        ORDER BY id DESC
+        LIMIT 1
+    </select>
+
+    <select id="listAuditLogs" resultType="com.encryprangedb.model.entity.QueryAuditLogEntity">
+        SELECT id,
+               action_type AS actionType,
+               sql_text AS sqlText,
+               table_name AS tableName,
+               column_name AS columnName,
+               lower_index AS lowerIndex,
+               upper_index AS upperIndex,
+               hit_count AS hitCount,
+               elapsed_ms AS elapsedMs,
+               status,
+               detail_text AS detailText,
+               created_at AS createdAt
+        FROM query_audit_log
+        ORDER BY id DESC
+        LIMIT #{limit}
+    </select>
+
+    <insert id="insertAuditLog" parameterType="com.encryprangedb.model.entity.QueryAuditLogEntity">
+        INSERT INTO query_audit_log (
+            action_type, sql_text, table_name, column_name, lower_index, upper_index, hit_count, elapsed_ms, status, detail_text
+        ) VALUES (
+            #{actionType}, #{sqlText}, #{tableName}, #{columnName}, #{lowerIndex}, #{upperIndex}, #{hitCount}, #{elapsedMs}, #{status}, #{detailText}
+        )
+    </insert>
+
+    <update id="deactivatePolicies">
+        UPDATE ope_policy_config
+        SET active_flag = 0
+    </update>
+
+    <insert id="insertPolicy" parameterType="com.encryprangedb.model.entity.OpePolicyEntity" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO ope_policy_config (policy_name, sensitivity, segment_json, active_flag)
+        VALUES (#{policyName}, #{sensitivity}, #{segmentJson}, #{activeFlag})
+    </insert>
+</mapper>

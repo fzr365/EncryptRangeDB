@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.encryprangedb.mapper.EafsOrderedNodeMapper">
+
+    <resultMap id="OrderedNodeMap" type="com.encryprangedb.model.entity.EafsOrderedNodeEntity">
+        <id property="id" column="id"/>
+        <result property="bucket" column="bucket"/>
+        <result property="chainOrder" column="chain_order"/>
+        <result property="recordId" column="record_id"/>
+        <result property="rindex" column="rindex"/>
+        <result property="prevNodeId" column="prev_node_id"/>
+        <result property="nextNodeId" column="next_node_id"/>
+        <result property="chainKeyHex" column="chain_key_hex"/>
+        <result property="payloadBase64" column="payload_base64"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <select id="countByBucket" resultType="long">
+        SELECT COUNT(*)
+        FROM eafs_ordered_node
+        WHERE bucket = #{bucket}
+    </select>
+
+    <select id="findHead" resultMap="OrderedNodeMap">
+        SELECT *
+        FROM eafs_ordered_node
+        WHERE bucket = #{bucket}
+        ORDER BY chain_order ASC
+        LIMIT 1
+    </select>
+
+    <select id="findById" resultMap="OrderedNodeMap">
+        SELECT *
+        FROM eafs_ordered_node
+        WHERE id = #{id}
+    </select>
+
+    <select id="findByBucketAndRecordId" resultMap="OrderedNodeMap">
+        SELECT *
+        FROM eafs_ordered_node
+        WHERE bucket = #{bucket}
+          AND record_id = #{recordId}
+        LIMIT 1
+    </select>
+
+    <select id="findPredecessor" resultMap="OrderedNodeMap">
+        SELECT *
+        FROM eafs_ordered_node
+        WHERE bucket = #{bucket}
+          AND rindex &lt;= #{rindex}
+        ORDER BY rindex DESC, chain_order DESC
+        LIMIT 1
+    </select>
+
+    <select id="listByBucket" resultMap="OrderedNodeMap">
+        SELECT *
+        FROM eafs_ordered_node
+        WHERE bucket = #{bucket}
+        ORDER BY chain_order ASC
+    </select>
+
+    <select id="listByBucketFromOrder" resultMap="OrderedNodeMap">
+        SELECT *
+        FROM eafs_ordered_node
+        WHERE bucket = #{bucket}
+          AND chain_order &gt;= #{fromOrder}
+        ORDER BY chain_order ASC
+    </select>
+
+    <update id="shiftChainOrdersToNegative">
+        UPDATE eafs_ordered_node
+        SET chain_order = -chain_order
+        WHERE bucket = #{bucket}
+          AND chain_order &gt;= #{fromOrder}
+    </update>
+
+    <update id="restoreShiftedChainOrders">
+        UPDATE eafs_ordered_node
+        SET chain_order = -chain_order + 1
+        WHERE bucket = #{bucket}
+          AND chain_order &lt;= -#{fromOrder}
+    </update>
+
+    <delete id="deleteByBucket">
+        DELETE FROM eafs_ordered_node
+        WHERE bucket = #{bucket}
+    </delete>
+
+    <insert id="insertNode" parameterType="com.encryprangedb.model.entity.EafsOrderedNodeEntity" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO eafs_ordered_node (
+            bucket, chain_order, record_id, rindex, prev_node_id, next_node_id, chain_key_hex, payload_base64
+        ) VALUES (
+            #{bucket}, #{chainOrder}, #{recordId}, #{rindex}, #{prevNodeId}, #{nextNodeId}, #{chainKeyHex}, #{payloadBase64}
+        )
+    </insert>
+
+    <update id="updateLinks">
+        UPDATE eafs_ordered_node
+        SET prev_node_id = #{prevNodeId},
+            next_node_id = #{nextNodeId}
+        WHERE id = #{id}
+    </update>
+</mapper>
