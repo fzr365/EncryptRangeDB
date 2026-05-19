@@ -8,6 +8,8 @@ public class EncryptedIndexEntity {
     private Long rindex;
     private Long skindex;
     private Integer segmentId;
+    private String indexTag;
+    private String keyVersion;
 
     public Long getId() {
         return id;
@@ -64,5 +66,20 @@ public class EncryptedIndexEntity {
     public void setSegmentId(Integer segmentId) {
         this.segmentId = segmentId;
     }
-}
 
+    public String getIndexTag() {
+        return indexTag;
+    }
+
+    public void setIndexTag(String indexTag) {
+        this.indexTag = indexTag;
+    }
+
+    public String getKeyVersion() {
+        return keyVersion;
+    }
+
+    public void setKeyVersion(String keyVersion) {
+        this.keyVersion = keyVersion;
+    }
+}

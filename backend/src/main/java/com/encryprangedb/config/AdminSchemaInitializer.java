@@ -90,6 +90,8 @@ public class AdminSchemaInitializer {
                     """);
             addColumnIfMissing("encrypted_record", "integrity_tag", "VARCHAR(128) NULL");
             addColumnIfMissing("encrypted_record", "key_version", "VARCHAR(32) NOT NULL DEFAULT 'v1'");
+            addColumnIfMissing("encrypted_index", "index_tag", "VARCHAR(128) NULL");
+            addColumnIfMissing("encrypted_index", "key_version", "VARCHAR(32) NOT NULL DEFAULT 'v1'");
         } catch (Exception ex) {
             log.warn("Admin schema initializer skipped: {}", ex.getMessage());
         }

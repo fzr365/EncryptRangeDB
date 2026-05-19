@@ -8,6 +8,7 @@ import com.encryprangedb.mapper.EafsOrderedNodeMapper;
 import com.encryprangedb.mapper.RecordMapper;
 import com.encryprangedb.model.entity.EafsAnchorEntity;
 import com.encryprangedb.model.entity.EafsOrderedNodeEntity;
+import com.encryprangedb.model.entity.EncryptedIndexEntity;
 import org.apache.commons.codec.binary.Hex;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,16 +28,19 @@ public class EafsOrderedIndexService {
     private final EafsOrderedNodeMapper orderedNodeMapper;
     private final EafsAnchorMapper anchorMapper;
     private final RecordMapper recordMapper;
+    private final IntegrityService integrityService;
     private final byte[] opeKey;
     private final int anchorStep;
 
     public EafsOrderedIndexService(EafsOrderedNodeMapper orderedNodeMapper,
                                    EafsAnchorMapper anchorMapper,
                                    RecordMapper recordMapper,
-                                   CryptoProperties cryptoProperties) {
+                                   CryptoProperties cryptoProperties,
+                                   IntegrityService integrityService) {
         this.orderedNodeMapper = orderedNodeMapper;
         this.anchorMapper = anchorMapper;
         this.recordMapper = recordMapper;
+        this.integrityService = integrityService;
         this.opeKey = cryptoProperties.getCrypto().getOpeMasterKey().getBytes(StandardCharsets.UTF_8);
         this.anchorStep = Math.max(1, cryptoProperties.getEafs().getBucketSize());
     }
@@ -48,14 +52,12 @@ public class EafsOrderedIndexService {
             return;
         }
 
-        // 先找插入位置，保证链表一直按 rindex 从小到大排列。
         EafsOrderedNodeEntity predecessor = orderedNodeMapper.findPredecessor(bucket, rindex);
         EafsOrderedNodeEntity successor = predecessor != null
                 ? nullableNode(predecessor.getNextNodeId())
                 : orderedNodeMapper.findHead(bucket);
         long chainOrder = predecessor != null ? predecessor.getChainOrder() + 1L : 1L;
 
-        // 先整体挪出空位，避免 chain_order 唯一约束冲突。
         orderedNodeMapper.shiftChainOrdersToNegative(bucket, chainOrder);
         orderedNodeMapper.restoreShiftedChainOrders(bucket, chainOrder);
 
@@ -77,7 +79,6 @@ public class EafsOrderedIndexService {
         if (successor != null) {
             orderedNodeMapper.updateLinks(successor.getId(), node.getId(), successor.getNextNodeId());
         }
-        // 插入点后面的锚点可能变化，只刷新受影响的一段。
         refreshAnchorsFrom(bucket, anchorRefreshStartOrder(chainOrder));
     }
 
@@ -93,11 +94,9 @@ public class EafsOrderedIndexService {
     }
 
     public List<ChainHit> scanRange(String table, String column, long lowerIndex, long upperIndex) {
-        // 第一次查询时如果链表还没建，就从普通索引表补建出来。
         ensureBucketMaterialized(table, column);
         String bucket = bucketOf(table, column);
 
-        // 从不大于 lowerIndex 的锚点开始，减少从头扫描的距离。
         EafsAnchorEntity anchor = anchorMapper.findFloorAnchor(bucket, lowerIndex);
         EafsOrderedNodeEntity node = anchor != null
                 ? orderedNodeMapper.findById(anchor.getNodeId())
@@ -117,7 +116,6 @@ public class EafsOrderedIndexService {
     }
 
     public Map<String, ChainPreview> previewByRecordIds(String table, String column, List<String> recordIds) {
-        // 给前端展示链表顺序、前驱后继和链密钥摘要。
         ensureBucketMaterialized(table, column);
         String bucket = bucketOf(table, column);
         Map<String, ChainPreview> out = new HashMap<>();
@@ -201,15 +199,15 @@ public class EafsOrderedIndexService {
 
     private void materializeBucket(String table, String column, boolean clearAnchorsBeforeRebuild) {
         String bucket = bucketOf(table, column);
-        var indexRows = recordMapper.selectIndexRows(table, column);
+        List<EncryptedIndexEntity> indexRows = recordMapper.selectIndexRows(table, column);
         if (indexRows.isEmpty()) {
             return;
         }
 
-        // 普通索引表已经按 rindex 排好，这里顺序写成 EAFS 链。
         EafsOrderedNodeEntity prev = null;
         long order = 1L;
-        for (var idx : indexRows) {
+        for (EncryptedIndexEntity idx : indexRows) {
+            verifyIndexRow(idx);
             EafsOrderedNodeEntity node = new EafsOrderedNodeEntity();
             node.setBucket(bucket);
             node.setChainOrder(order++);
@@ -229,8 +227,24 @@ public class EafsOrderedIndexService {
         rebuildAnchors(bucket, clearAnchorsBeforeRebuild);
     }
 
+    private void verifyIndexRow(EncryptedIndexEntity idx) {
+        if (idx.getRindex() == null) {
+            throw new IllegalStateException("Encrypted index is missing rindex, recordId=" + idx.getRecordId());
+        }
+        String keyVersion = idx.getKeyVersion() == null || idx.getKeyVersion().isBlank() ? "v1" : idx.getKeyVersion();
+        boolean ok = integrityService.verifyIndex(
+                idx.getTableName(),
+                idx.getColumnName(),
+                idx.getRecordId(),
+                idx.getRindex(),
+                keyVersion,
+                idx.getIndexTag());
+        if (!ok) {
+            throw new IllegalStateException("Encrypted index integrity check failed, recordId=" + idx.getRecordId());
+        }
+    }
+
     private long anchorRefreshStartOrder(long changedOrder) {
-        // 找到插入位置所属的锚点块，从这一块开始重建。
         long block = (changedOrder - 1L) / anchorStep;
         return block * anchorStep + 1L;
     }
@@ -244,7 +258,6 @@ public class EafsOrderedIndexService {
     }
 
     private String buildChainKey(String bucket, String recordId, long rindex) {
-        // 链节点的派生密钥，不直接暴露主密钥。
         byte[] mac = HmacUtil.hmacSha256(opeKey, (bucket + "|" + recordId + "|" + rindex).getBytes(StandardCharsets.UTF_8));
         return Hex.encodeHexString(HashUtil.sha256(mac));
     }

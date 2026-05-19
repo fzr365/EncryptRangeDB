@@ -16,9 +16,16 @@
     </update>
 
     <insert id="insertIndex" parameterType="com.encryprangedb.model.entity.EncryptedIndexEntity">
-        INSERT INTO encrypted_index (table_name, column_name, record_id, rindex, skindex, segment_id)
-        VALUES (#{tableName}, #{columnName}, #{recordId}, #{rindex}, #{skindex}, #{segmentId})
+        INSERT INTO encrypted_index (table_name, column_name, record_id, rindex, skindex, segment_id, index_tag, key_version)
+        VALUES (#{tableName}, #{columnName}, #{recordId}, #{rindex}, #{skindex}, #{segmentId}, #{indexTag}, #{keyVersion})
     </insert>
+
+    <update id="updateIndexIntegrity">
+        UPDATE encrypted_index
+        SET index_tag = #{indexTag},
+            key_version = #{keyVersion}
+        WHERE id = #{id}
+    </update>
 
     <select id="listIndexedBuckets" resultType="map">
         SELECT DISTINCT table_name AS tableName,
@@ -61,11 +68,27 @@
                record_id AS recordId,
                rindex,
                skindex,
-               segment_id AS segmentId
+               segment_id AS segmentId,
+               index_tag AS indexTag,
+               key_version AS keyVersion
         FROM encrypted_index
         WHERE table_name = #{table}
           AND column_name = #{column}
         ORDER BY rindex ASC, id ASC
+    </select>
+
+    <select id="selectAllIndexes" resultType="com.encryprangedb.model.entity.EncryptedIndexEntity">
+        SELECT id,
+               table_name AS tableName,
+               column_name AS columnName,
+               record_id AS recordId,
+               rindex,
+               skindex,
+               segment_id AS segmentId,
+               index_tag AS indexTag,
+               key_version AS keyVersion
+        FROM encrypted_index
+        ORDER BY id ASC
     </select>
 
     <select id="selectByRange" resultType="map">
@@ -76,7 +99,9 @@
                i.table_name,
                i.column_name,
                i.rindex,
-               i.segment_id
+               i.segment_id,
+               i.index_tag,
+               i.key_version
         FROM encrypted_index i
                  INNER JOIN encrypted_record r ON i.record_id = r.record_id
         WHERE i.table_name = #{table}
@@ -93,7 +118,9 @@
                i.table_name,
                i.column_name,
                i.rindex,
-               i.segment_id
+               i.segment_id,
+               i.index_tag,
+               i.key_version
         FROM encrypted_record r
                  LEFT JOIN encrypted_index i
                            ON i.record_id = r.record_id
@@ -115,7 +142,9 @@
                i.table_name,
                i.column_name,
                i.rindex,
-               i.segment_id
+               i.segment_id,
+               i.index_tag,
+               i.key_version
         FROM encrypted_record r
                  LEFT JOIN encrypted_index i
                            ON i.record_id = r.record_id

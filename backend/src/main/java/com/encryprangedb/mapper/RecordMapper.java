@@ -18,6 +18,10 @@ public interface RecordMapper {
 
     void insertIndex(EncryptedIndexEntity entity);
 
+    void updateIndexIntegrity(@Param("id") Long id,
+                              @Param("indexTag") String indexTag,
+                              @Param("keyVersion") String keyVersion);
+
     List<Map<String, Object>> listIndexedBuckets();
 
     EncryptedRecordEntity selectRecord(@Param("table") String table,
@@ -27,6 +31,8 @@ public interface RecordMapper {
 
     List<EncryptedIndexEntity> selectIndexRows(@Param("table") String table,
                                                @Param("column") String column);
+
+    List<EncryptedIndexEntity> selectAllIndexes();
 
     List<Map<String, Object>> selectByRange(@Param("table") String table,
                                             @Param("column") String column,

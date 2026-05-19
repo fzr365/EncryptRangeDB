@@ -6,6 +6,7 @@ import com.encryprangedb.mapper.RecordMapper;
 import com.encryprangedb.model.entity.OpePolicyEntity;
 import com.encryprangedb.model.PlainInsertRequest;
 import com.encryprangedb.model.RangeQueryRequest;
+import com.encryprangedb.model.entity.EncryptedIndexEntity;
 import com.encryprangedb.model.entity.EncryptedRecordEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -17,6 +18,7 @@ import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -125,9 +127,13 @@ class RecordServiceTest {
         Map<String, Object> rowEmp2 = new HashMap<>();
         rowEmp2.put("record_id", "emp-2");
         rowEmp2.put("rindex", 200L);
+        rowEmp2.put("index_tag", "tag-2");
+        rowEmp2.put("key_version", "v1");
         Map<String, Object> rowEmp1 = new HashMap<>();
         rowEmp1.put("record_id", "emp-1");
         rowEmp1.put("rindex", 100L);
+        rowEmp1.put("index_tag", "tag-1");
+        rowEmp1.put("key_version", "v1");
         when(recordMapper.selectLatest("employees", "salary", 20)).thenReturn(List.of(rowEmp2, rowEmp1));
 
         when(orderedIndexService.previewByRecordIds("employees", "salary", List.of("emp-2", "emp-1")))
@@ -174,9 +180,13 @@ class RecordServiceTest {
         Map<String, Object> rowEmp1 = new HashMap<>();
         rowEmp1.put("record_id", "emp-1");
         rowEmp1.put("rindex", 100L);
+        rowEmp1.put("index_tag", "tag-1");
+        rowEmp1.put("key_version", "v1");
         Map<String, Object> rowEmp2 = new HashMap<>();
         rowEmp2.put("record_id", "emp-2");
         rowEmp2.put("rindex", 200L);
+        rowEmp2.put("index_tag", "tag-2");
+        rowEmp2.put("key_version", "v1");
         when(recordMapper.selectByRecordIds("employees", "salary", List.of("emp-2", "emp-1")))
                 .thenReturn(List.of(rowEmp1, rowEmp2));
         when(orderedIndexService.previewByRecordIds("employees", "salary", List.of("emp-2", "emp-1")))
@@ -191,12 +201,87 @@ class RecordServiceTest {
         assertEquals("emp-1", rows.get(1).get("record_id"));
     }
 
+    @Test
+    void queryRangeShouldRejectTamperedIndexTag() {
+        RecordMapper recordMapper = Mockito.mock(RecordMapper.class);
+        EafsOrderedIndexService orderedIndexService = Mockito.mock(EafsOrderedIndexService.class);
+
+        CryptoProperties props = new CryptoProperties();
+        CryptoProperties.Crypto c = new CryptoProperties.Crypto();
+        c.setAesMasterKey("0123456789abcdef0123456789abcdef");
+        c.setOpeMasterKey("0123456789abcdef0123456789abcdef");
+        c.setSensitivity(1);
+        props.setCrypto(c);
+
+        AnalyticsMapper analyticsMapper = Mockito.mock(AnalyticsMapper.class);
+        when(analyticsMapper.activePolicy()).thenReturn(null);
+
+        OpePolicyService opePolicyService = new OpePolicyService(analyticsMapper, props, new ObjectMapper());
+        CryptoService cryptoService = new CryptoService(props, opePolicyService);
+        IntegrityService integrityService = integrityService();
+        when(integrityService.verifyIndex("employees", "salary", "emp-1", 100L, "v1", "bad-tag")).thenReturn(false);
+        RecordService recordService = new RecordService(recordMapper, cryptoService, orderedIndexService, integrityService, new ObjectMapper());
+
+        when(orderedIndexService.scanRange("employees", "salary", 100L, 100L))
+                .thenReturn(List.of(new EafsOrderedIndexService.ChainHit("emp-1", 100L, 1L, "key-1", null, null)));
+
+        Map<String, Object> rowEmp1 = new HashMap<>();
+        rowEmp1.put("record_id", "emp-1");
+        rowEmp1.put("rindex", 100L);
+        rowEmp1.put("index_tag", "bad-tag");
+        rowEmp1.put("key_version", "v1");
+        when(recordMapper.selectByRecordIds("employees", "salary", List.of("emp-1"))).thenReturn(List.of(rowEmp1));
+
+        assertThrows(IllegalStateException.class,
+                () -> recordService.queryRange(new RangeQueryRequest("employees", "salary", 100L, 100L)));
+    }
+
+    @Test
+    void repairIndexIntegrityTagsShouldBackfillLegacyIndexes() {
+        RecordMapper recordMapper = Mockito.mock(RecordMapper.class);
+        EafsOrderedIndexService orderedIndexService = Mockito.mock(EafsOrderedIndexService.class);
+
+        CryptoProperties props = new CryptoProperties();
+        CryptoProperties.Crypto c = new CryptoProperties.Crypto();
+        c.setAesMasterKey("0123456789abcdef0123456789abcdef");
+        c.setOpeMasterKey("0123456789abcdef0123456789abcdef");
+        c.setSensitivity(1);
+        props.setCrypto(c);
+
+        AnalyticsMapper analyticsMapper = Mockito.mock(AnalyticsMapper.class);
+        when(analyticsMapper.activePolicy()).thenReturn(null);
+
+        OpePolicyService opePolicyService = new OpePolicyService(analyticsMapper, props, new ObjectMapper());
+        CryptoService cryptoService = new CryptoService(props, opePolicyService);
+        IntegrityService integrityService = integrityService();
+        RecordService recordService = new RecordService(recordMapper, cryptoService, orderedIndexService, integrityService, new ObjectMapper());
+
+        EncryptedIndexEntity idx = new EncryptedIndexEntity();
+        idx.setId(1L);
+        idx.setTableName("employees");
+        idx.setColumnName("salary");
+        idx.setRecordId("emp-1");
+        idx.setRindex(100L);
+        idx.setKeyVersion(null);
+        when(recordMapper.selectAllIndexes()).thenReturn(List.of(idx));
+
+        RecordService.IndexIntegrityRepairResult result = recordService.repairIndexIntegrityTags();
+
+        assertEquals(1, result.repairedIndexes());
+        assertEquals(0, result.skippedIndexes());
+        verify(recordMapper).updateIndexIntegrity(1L, "index-tag", "v1");
+    }
+
     private IntegrityService integrityService() {
         IntegrityService integrityService = Mockito.mock(IntegrityService.class);
         when(integrityService.currentKeyVersion()).thenReturn("v1");
         when(integrityService.tag(Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
                 .thenReturn("test-tag");
         when(integrityService.verify(Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.anyString()))
+                .thenReturn(true);
+        when(integrityService.tagIndex(Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.anyLong(), Mockito.anyString()))
+                .thenReturn("index-tag");
+        when(integrityService.verifyIndex(Mockito.anyString(), Mockito.anyString(), Mockito.anyString(), Mockito.anyLong(), Mockito.anyString(), Mockito.anyString()))
                 .thenReturn(true);
         return integrityService;
     }

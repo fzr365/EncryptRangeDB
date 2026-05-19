@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -28,7 +29,7 @@ class EafsOrderedIndexServiceTest {
         EafsOrderedNodeMapper nodeMapper = Mockito.mock(EafsOrderedNodeMapper.class);
         EafsAnchorMapper anchorMapper = Mockito.mock(EafsAnchorMapper.class);
         RecordMapper recordMapper = Mockito.mock(RecordMapper.class);
-        EafsOrderedIndexService service = new EafsOrderedIndexService(nodeMapper, anchorMapper, recordMapper, buildProps(4));
+        EafsOrderedIndexService service = new EafsOrderedIndexService(nodeMapper, anchorMapper, recordMapper, buildProps(4), integrityService());
 
         EafsOrderedNodeEntity predecessor = new EafsOrderedNodeEntity();
         predecessor.setId(10L);
@@ -66,7 +67,7 @@ class EafsOrderedIndexServiceTest {
         EafsOrderedNodeMapper nodeMapper = Mockito.mock(EafsOrderedNodeMapper.class);
         EafsAnchorMapper anchorMapper = Mockito.mock(EafsAnchorMapper.class);
         RecordMapper recordMapper = Mockito.mock(RecordMapper.class);
-        EafsOrderedIndexService service = new EafsOrderedIndexService(nodeMapper, anchorMapper, recordMapper, buildProps(3));
+        EafsOrderedIndexService service = new EafsOrderedIndexService(nodeMapper, anchorMapper, recordMapper, buildProps(3), integrityService());
 
         Map<String, Object> bucket = new HashMap<>();
         bucket.put("tableName", "employees");
@@ -94,6 +95,32 @@ class EafsOrderedIndexServiceTest {
                 nodeCaptor.getAllValues().stream().map(EafsOrderedNodeEntity::getRecordId).toList());
     }
 
+    @Test
+    void rebuildAllBucketsShouldRejectTamperedIndexRows() {
+        EafsOrderedNodeMapper nodeMapper = Mockito.mock(EafsOrderedNodeMapper.class);
+        EafsAnchorMapper anchorMapper = Mockito.mock(EafsAnchorMapper.class);
+        RecordMapper recordMapper = Mockito.mock(RecordMapper.class);
+        IntegrityService integrityService = integrityService();
+        EafsOrderedIndexService service = new EafsOrderedIndexService(nodeMapper, anchorMapper, recordMapper, buildProps(3), integrityService);
+
+        Map<String, Object> bucket = new HashMap<>();
+        bucket.put("tableName", "employees");
+        bucket.put("columnName", "salary");
+        when(recordMapper.listIndexedBuckets()).thenReturn(List.of(bucket));
+
+        EncryptedIndexEntity idx = new EncryptedIndexEntity();
+        idx.setTableName("employees");
+        idx.setColumnName("salary");
+        idx.setRecordId("emp-1");
+        idx.setRindex(100L);
+        idx.setKeyVersion("v1");
+        idx.setIndexTag("bad-tag");
+        when(recordMapper.selectIndexRows("employees", "salary")).thenReturn(List.of(idx));
+        when(integrityService.verifyIndex("employees", "salary", "emp-1", 100L, "v1", "bad-tag")).thenReturn(false);
+
+        assertThrows(IllegalStateException.class, service::rebuildAllBuckets);
+    }
+
     private CryptoProperties buildProps(int bucketSize) {
         CryptoProperties props = new CryptoProperties();
         CryptoProperties.Crypto crypto = new CryptoProperties.Crypto();
@@ -106,5 +133,11 @@ class EafsOrderedIndexServiceTest {
         eafs.setBucketSize(bucketSize);
         props.setEafs(eafs);
         return props;
+    }
+
+    private IntegrityService integrityService() {
+        IntegrityService integrityService = Mockito.mock(IntegrityService.class);
+        when(integrityService.verifyIndex(any(), any(), any(), any(Long.class), any(), any())).thenReturn(true);
+        return integrityService;
     }
 }

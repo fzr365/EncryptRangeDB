@@ -19,6 +19,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Service
@@ -44,7 +45,6 @@ public class RecordService {
 
     @Transactional
     public EncryptedRecord insertPlain(PlainInsertRequest request) {
-        // 前端传来的明文字段在这里统一转成密文字段。
         List<EncryptedField> fields = new ArrayList<>();
         for (PlainInsertRequest.Field field : request.fields()) {
             String column = field.column();
@@ -52,7 +52,6 @@ public class RecordService {
             var payload = cryptoService.encryptField(column, plaintext);
             Long rindex = null;
             if (field.indexed()) {
-                // 只有需要范围查询的字段才额外生成保序索引。
                 long numeric = parseLongStrict(field.value(), column);
                 rindex = cryptoService.computeIndex(numeric);
             }
@@ -65,7 +64,6 @@ public class RecordService {
         entity.setRecordId(record.recordId());
         entity.setCipherBlob(serialize(record));
         entity.setKeyVersion(integrityService.currentKeyVersion());
-        // 完整性标签和密文一起存，查询时用来判断密文是否被改过。
         entity.setIntegrityTag(null);
         entity.setCreatedAt(OffsetDateTime.now());
         recordMapper.insertRecord(entity);
@@ -75,13 +73,7 @@ public class RecordService {
             if (field.rindex() == null) {
                 continue;
             }
-            EncryptedIndexEntity idx = new EncryptedIndexEntity();
-            idx.setTableName(record.table());
-            idx.setColumnName(field.column());
-            idx.setRecordId(record.recordId());
-            idx.setRindex(field.rindex());
-            recordMapper.insertIndex(idx);
-            // 同步维护 EAFS 有序链，后续范围查询直接走链表和锚点。
+            insertIndexRow(record.table(), field.column(), record.recordId(), field.rindex(), null, null, entity.getKeyVersion());
             eafsOrderedIndexService.insertOrdered(record.table(), field.column(), field.rindex(), record.recordId());
         }
         return record;
@@ -89,7 +81,6 @@ public class RecordService {
 
     @Transactional
     public EncryptedRecord insertEncrypted(EncryptedInsertRequest request) {
-        // 客户端已经加密好的数据，后端只负责落库和维护索引。
         EncryptedRecord record = new EncryptedRecord(request.table(), request.recordId(), request.fields());
         EncryptedRecordEntity entity = new EncryptedRecordEntity();
         entity.setTableName(record.table());
@@ -105,22 +96,14 @@ public class RecordService {
             if (field.rindex() == null) {
                 continue;
             }
-            EncryptedIndexEntity idx = new EncryptedIndexEntity();
-            idx.setTableName(record.table());
-            idx.setColumnName(field.column());
-            idx.setRecordId(record.recordId());
-            idx.setRindex(field.rindex());
-            idx.setSkindex(field.skindex());
-            idx.setSegmentId(field.segmentId());
-            recordMapper.insertIndex(idx);
+            insertIndexRow(record.table(), field.column(), record.recordId(), field.rindex(), field.skindex(), field.segmentId(), entity.getKeyVersion());
             eafsOrderedIndexService.insertOrdered(record.table(), field.column(), field.rindex(), record.recordId());
         }
         return record;
     }
 
     public List<Map<String, Object>> queryRange(RangeQueryRequest req) {
-        // 查询时不解密比较，只根据索引边界扫描 EAFS 有序链。
-        var hits = eafsOrderedIndexService.scanRange(req.table(), req.column(), req.lowerIndex(), req.upperIndex());
+        List<EafsOrderedIndexService.ChainHit> hits = eafsOrderedIndexService.scanRange(req.table(), req.column(), req.lowerIndex(), req.upperIndex());
         if (hits.isEmpty()) {
             return List.of();
         }
@@ -130,8 +113,11 @@ public class RecordService {
         for (int i = 0; i < orderedRecordIds.size(); i++) {
             orderMap.put(orderedRecordIds.get(i), i);
         }
-        // 数据库 IN 查询不保证顺序，这里按链表命中顺序排回去。
         rows.sort(Comparator.comparingInt(row -> orderMap.getOrDefault(String.valueOf(row.get("record_id")), Integer.MAX_VALUE)));
+
+        Map<String, Long> expectedRindex = hits.stream()
+                .collect(Collectors.toMap(EafsOrderedIndexService.ChainHit::recordId, EafsOrderedIndexService.ChainHit::rindex, (left, right) -> left));
+        verifyIndexRows(rows, req.table(), req.column(), expectedRindex);
         enrichRows(rows, req.table(), req.column());
         return rows;
     }
@@ -160,6 +146,49 @@ public class RecordService {
         return new IntegrityRepairResult(repaired, skipped);
     }
 
+    @Transactional
+    public IndexIntegrityRepairResult repairIndexIntegrityTags() {
+        int repaired = 0;
+        int skipped = 0;
+        String fallbackKeyVersion = integrityService.currentKeyVersion();
+        for (EncryptedIndexEntity idx : recordMapper.selectAllIndexes()) {
+            if (idx.getId() == null
+                    || idx.getTableName() == null
+                    || idx.getColumnName() == null
+                    || idx.getRecordId() == null
+                    || idx.getRindex() == null) {
+                skipped++;
+                continue;
+            }
+            String keyVersion = normalizeKeyVersion(idx.getKeyVersion());
+            if ("v1".equals(keyVersion) && (idx.getKeyVersion() == null || idx.getKeyVersion().isBlank())) {
+                keyVersion = fallbackKeyVersion;
+            }
+            String tag = integrityService.tagIndex(
+                    idx.getTableName(),
+                    idx.getColumnName(),
+                    idx.getRecordId(),
+                    idx.getRindex(),
+                    keyVersion);
+            recordMapper.updateIndexIntegrity(idx.getId(), tag, keyVersion);
+            repaired++;
+        }
+        return new IndexIntegrityRepairResult(repaired, skipped);
+    }
+
+    private void insertIndexRow(String table, String column, String recordId, long rindex, Long skindex, Integer segmentId, String keyVersion) {
+        EncryptedIndexEntity idx = new EncryptedIndexEntity();
+        idx.setTableName(table);
+        idx.setColumnName(column);
+        idx.setRecordId(recordId);
+        idx.setRindex(rindex);
+        idx.setSkindex(skindex);
+        idx.setSegmentId(segmentId);
+        idx.setKeyVersion(keyVersion);
+        idx.setIndexTag(integrityService.tagIndex(table, column, recordId, rindex, keyVersion));
+        recordMapper.insertIndex(idx);
+    }
+
     private void refreshIntegrityTag(String table, String recordId) {
         EncryptedRecordEntity stored = recordMapper.selectRecord(table, recordId);
         if (stored == null || stored.getCipherBlob() == null) {
@@ -179,8 +208,10 @@ public class RecordService {
                 .collect(Collectors.toList());
         Map<String, EafsOrderedIndexService.ChainPreview> previewByRecordId =
                 eafsOrderedIndexService.previewByRecordIds(table, column, recordIds);
+        Map<String, Long> expectedRindex = previewByRecordId.entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().rindex()));
+        verifyIndexRows(rows, table, column, expectedRindex);
         for (Map<String, Object> row : rows) {
-            // 返回给前端前顺手补上完整性状态和链表位置。
             verifyIntegrity(row, table);
             String recordId = String.valueOf(row.get("record_id"));
             EafsOrderedIndexService.ChainPreview preview = previewByRecordId.get(recordId);
@@ -194,6 +225,27 @@ public class RecordService {
                 row.put("prevRecordId", null);
                 row.put("nextRecordId", null);
             }
+        }
+    }
+
+    private void verifyIndexRows(List<Map<String, Object>> rows, String table, String column, Map<String, Long> expectedRindex) {
+        for (Map<String, Object> row : rows) {
+            String recordId = String.valueOf(row.get("record_id"));
+            Long expected = expectedRindex.get(recordId);
+            if (expected == null) {
+                continue;
+            }
+            Long actual = asLong(row.get("rindex"));
+            if (!Objects.equals(actual, expected)) {
+                throw new IllegalStateException("Encrypted index mismatch detected, recordId=" + recordId);
+            }
+            String keyVersion = normalizeKeyVersion(row.get("key_version") == null ? null : String.valueOf(row.get("key_version")));
+            String tag = row.get("index_tag") == null ? null : String.valueOf(row.get("index_tag"));
+            if (!integrityService.verifyIndex(table, column, recordId, expected, keyVersion, tag)) {
+                throw new IllegalStateException("Encrypted index integrity check failed, recordId=" + recordId);
+            }
+            row.put("indexIntegrityStatus", "PASS");
+            row.put("indexKeyVersion", keyVersion);
         }
     }
 
@@ -221,6 +273,20 @@ public class RecordService {
         }
     }
 
+    private Long asLong(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
     private String normalizeKeyVersion(String keyVersion) {
         return keyVersion == null || keyVersion.isBlank() ? "v1" : keyVersion;
     }
@@ -234,5 +300,8 @@ public class RecordService {
     }
 
     public record IntegrityRepairResult(int repairedRecords, int skippedRecords) {
+    }
+
+    public record IndexIntegrityRepairResult(int repairedIndexes, int skippedIndexes) {
     }
 }

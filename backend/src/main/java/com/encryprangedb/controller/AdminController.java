@@ -106,4 +106,14 @@ public class AdminController {
                 "skipped=" + result.skippedRecords());
         return result;
     }
+
+    @PostMapping("/repair-index-integrity-tags")
+    public RecordService.IndexIntegrityRepairResult repairIndexIntegrityTags() {
+        long start = System.currentTimeMillis();
+        RecordService.IndexIntegrityRepairResult result = recordService.repairIndexIntegrityTags();
+        auditLogService.log("INDEX_INTEGRITY_REPAIR", null, null, null, null, null,
+                result.repairedIndexes(), System.currentTimeMillis() - start, "SUCCESS",
+                "skipped=" + result.skippedIndexes());
+        return result;
+    }
 }
