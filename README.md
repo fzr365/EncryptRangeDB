@@ -1,6 +1,6 @@
 # EncryptRangeDB
 
-基于密文范围查询的安全数据库管理系统。项目采用前后端分离架构，后端基于 Spring Boot、MyBatis 和 MySQL，前端基于 Vue 3、Vite 和 View UI Plus，实现了密文存储、可编程 OPE 范围索引、EAFS 有序链式索引、完整性校验、权限控制和审计日志。
+基于密文范围查询的安全数据库管理系统。项目采用前后端分离架构，后端基于 Spring Boot、MyBatis 和 MySQL，前端基于 Vue 3、Vite 和 View UI Plus，实现了密文存储、改进型 OPE 范围索引、EAFS 有序链式索引、完整性校验、权限控制和审计日志。
 
 ## 项目概述
 
@@ -10,7 +10,7 @@
 
 - AES-GCM 字段级加密存储
 - HMAC-SHA256 记录完整性校验
-- 可编程 OPE 范围索引 `rindex`
+- 改进型 OPE 范围索引 `rindex`
 - EAFS 有序链式索引维护与扫描
 - SQL 范围条件解析与索引区间转换
 - 用户认证、角色权限控制和审计日志
